@@ -1,49 +1,69 @@
 import cv2
 import mediapipe as mp
+import numpy as np
 import pyautogui
+import time
+
 
 mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(max_num_hands=1)
-mp_draw = mp.solutions.drawing_utils
-
-screen_w, screen_h = pyautogui.size()
+mp_drawing = mp.solutions.drawing_utils
+hands = mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.7)
 
 cap = cv2.VideoCapture(0)
+
+prev_distance = 0
+threshold = 10
+last_mute_time = 0
+mute_cooldown = 1 
 
 while True:
     ret, frame = cap.read()
     frame = cv2.flip(frame, 1)
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = hands.process(rgb_frame)
+
     h, w, _ = frame.shape
 
-    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    result = hands.process(rgb_frame)
+    if results.multi_hand_landmarks:
+        for hand_landmarks in results.multi_hand_landmarks:
+            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
 
-    if result.multi_hand_landmarks:
-        for hand_landmarks in result.multi_hand_landmarks:
-            mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+            x1, y1 = int(hand_landmarks.landmark[4].x * w), int(hand_landmarks.landmark[4].y * h)   # Thumb
+            x2, y2 = int(hand_landmarks.landmark[8].x * w), int(hand_landmarks.landmark[8].y * h)   # Index
+            x3, y3 = int(hand_landmarks.landmark[12].x * w), int(hand_landmarks.landmark[12].y * h) # Middle
+            x4, y4 = int(hand_landmarks.landmark[16].x * w), int(hand_landmarks.landmark[16].y * h) # Ring
+            x5, y5 = int(hand_landmarks.landmark[20].x * w), int(hand_landmarks.landmark[20].y * h) # Pinky
 
-            x_index = int(hand_landmarks.landmark[8].x * w)
-            y_index = int(hand_landmarks.landmark[8].y * h)
+            cv2.circle(frame, (x1, y1), 8, (255, 0, 0), -1)
+            cv2.circle(frame, (x2, y2), 8, (255, 0, 0), -1)
+            cv2.line(frame, (x1, y1), (x2, y2), (255, 0, 255), 3)
 
-            mouse_x = int((x_index / w) * screen_w)
-            mouse_y = int((y_index / h) * screen_h)
-            pyautogui.moveTo(mouse_x, mouse_y)
+            distance = np.hypot(x2 - x1, y2 - y1)
 
-            x_thumb = int(hand_landmarks.landmark[4].x * w)
-            y_thumb = int(hand_landmarks.landmark[4].y * h)
+            fingers = [y2 < y1, y3 < y1, y4 < y1, y5 < y1]  # True = finger up
+            finger_count = fingers.count(True)
 
-            cv2.circle(frame, (x_index, y_index), 10, (0, 255, 0), -1)
-            cv2.circle(frame, (x_thumb, y_thumb), 10, (0, 0, 255), -1)
+            if finger_count == 0 and time.time() - last_mute_time > mute_cooldown:
+                pyautogui.press("volumemute")
+                last_mute_time = time.time()
 
-            distance = ((x_thumb - x_index) ** 2 + (y_thumb - y_index) ** 2) ** 0.5
+            if prev_distance != 0:
+                if distance - prev_distance > threshold:
+                    pyautogui.press("volumeup")
+                elif prev_distance - distance > threshold:
+                    pyautogui.press("volumedown")
 
-            if distance < 30:
-                pyautogui.click()
-                pyautogui.sleep(0.2)
+            prev_distance = distance
 
-    cv2.imshow("Hand Gesture Mouse", frame)
+            # Draw volume bar (mapped to distance range)
+            vol_bar = int(np.interp(distance, [20, 200], [400, 150]))
+            cv2.rectangle(frame, (50, 150), (85, 400), (0, 255, 0), 2)
+            cv2.rectangle(frame, (50, vol_bar), (85, 400), (0, 255, 0), -1)
+            cv2.putText(frame, "Volume", (40, 430), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-    if cv2.waitKey(1) == ord("q"):
+    cv2.imshow("Gesture Volume Control PRO", frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
 cap.release()
